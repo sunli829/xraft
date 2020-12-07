@@ -19,13 +19,13 @@ pub struct VoteResponse {
 }
 
 #[derive(Serialize, Deserialize)]
-pub struct AppendEntriesRequest<D> {
+pub struct AppendEntriesRequest<T> {
     pub term: TermId,
     pub leader_id: NodeId,
     pub prev_log_index: LogIndex,
     pub prev_log_term: TermId,
     pub leader_commit: LogIndex,
-    pub entries: Vec<Entry<D>>,
+    pub entries: Vec<Entry<T>>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -35,12 +35,16 @@ pub struct AppendEntriesResponse {
 }
 
 #[async_trait::async_trait]
-pub trait Network<N, D>: Send + Sync + Unpin {
-    async fn vote(&self, target: &NodeInfo<N>, req: VoteRequest) -> NetworkResult<VoteResponse>;
+pub trait Network<NodeDetail, Data>: Send + Sync + Unpin {
+    async fn vote(
+        &self,
+        target: &NodeInfo<NodeDetail>,
+        req: VoteRequest,
+    ) -> NetworkResult<VoteResponse>;
 
     async fn append_entries(
         &self,
-        target: &NodeInfo<N>,
-        req: AppendEntriesRequest<D>,
+        target: &NodeInfo<NodeDetail>,
+        req: AppendEntriesRequest<Data>,
     ) -> NetworkResult<AppendEntriesResponse>;
 }

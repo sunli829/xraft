@@ -1,3 +1,5 @@
+use std::ops::Deref;
+
 use serde::{Deserialize, Serialize};
 
 pub type NodeId = u64;
@@ -21,13 +23,21 @@ pub enum EntryDetail<D> {
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Entry<D> {
-    term: TermId,
-    index: LogIndex,
-    detail: EntryDetail<D>,
+    pub term: TermId,
+    pub index: LogIndex,
+    pub detail: EntryDetail<D>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct NodeInfo<N = ()> {
-    id: NodeId,
-    detail: N,
+    pub id: NodeId,
+    pub detail: N,
+}
+
+impl<N> Deref for NodeInfo<N> {
+    type Target = N;
+
+    fn deref(&self) -> &Self::Target {
+        &self.detail
+    }
 }

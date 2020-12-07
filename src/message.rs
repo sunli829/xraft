@@ -1,8 +1,8 @@
 use futures::channel::oneshot;
 
 use crate::{
-    AppendEntriesRequest, AppendEntriesResponse, ClientError, RaftError, Result, VoteRequest,
-    VoteResponse,
+    AppendEntriesRequest, AppendEntriesResponse, ClientError, Metrics, RaftError, Result,
+    VoteRequest, VoteResponse,
 };
 
 pub enum Message<D> {
@@ -18,14 +18,14 @@ pub enum Message<D> {
         reply: oneshot::Sender<Result<AppendEntriesResponse>>,
     },
     ClientWrite {
-        actions: Vec<WriteAction>,
+        actions: D,
         reply: oneshot::Sender<Result<(), ClientError>>,
     },
     ClientRead {
         reply: oneshot::Sender<Result<(), ClientError>>,
     },
     Metrics {
-        reply: oneshot::Sender<Result<RaftMetrics>>,
+        reply: oneshot::Sender<Result<Metrics>>,
     },
     Shutdown,
 }
