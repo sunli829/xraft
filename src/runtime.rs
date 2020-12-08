@@ -1,11 +1,17 @@
 #[cfg(feature = "tokio")]
 mod tokio_runtime {
-    use futures::pin_mut;
     use futures::{Future, FutureExt};
     use std::pin::Pin;
     use std::task::{Context, Poll};
+    use std::time::Duration;
 
     pub struct Delay(tokio::time::Sleep);
+
+    impl Delay {
+        pub fn new(duration: Duration) -> Self {
+            Delay(tokio::time::sleep(duration))
+        }
+    }
 
     impl Future for Delay {
         type Output = ();

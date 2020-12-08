@@ -1,12 +1,12 @@
 use futures::channel::oneshot;
 
 use crate::{
-    AppendEntriesRequest, AppendEntriesResponse, ClientError, Metrics, RaftError, Result,
-    VoteRequest, VoteResponse,
+    AppendEntriesRequest, AppendEntriesResponse, Metrics, NodeId, Result, VoteRequest, VoteResponse,
 };
 
-pub enum Message<D> {
+pub enum Message<N, D> {
     Initialize {
+        members: Vec<(NodeId, N)>,
         reply: oneshot::Sender<Result<()>>,
     },
     Vote {
@@ -14,15 +14,24 @@ pub enum Message<D> {
         reply: oneshot::Sender<Result<VoteResponse>>,
     },
     AppendEntries {
-        req: AppendEntriesRequest<D>,
+        req: AppendEntriesRequest<N, D>,
         reply: oneshot::Sender<Result<AppendEntriesResponse>>,
     },
     ClientWrite {
-        actions: D,
-        reply: oneshot::Sender<Result<(), ClientError>>,
+        action: D,
+        reply: oneshot::Sender<Result<()>>,
     },
     ClientRead {
-        reply: oneshot::Sender<Result<(), ClientError>>,
+        reply: oneshot::Sender<Result<()>>,
+    },
+    AddNode {
+        id: NodeId,
+        info: N,
+        reply: oneshot::Sender<Result<()>>,
+    },
+    RemoveNode {
+        id: NodeId,
+        reply: oneshot::Sender<Result<()>>,
     },
     Metrics {
         reply: oneshot::Sender<Result<Metrics>>,
