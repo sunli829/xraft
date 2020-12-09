@@ -10,6 +10,8 @@ pub struct Config {
     pub election_timeout_max: u64,
     #[serde(default = "default_max_payload_entries")]
     pub max_payload_entries: usize,
+    #[serde(default = "default_to_voter_threshold")]
+    pub to_voter_threshold: usize,
 }
 
 impl Default for Config {
@@ -19,6 +21,7 @@ impl Default for Config {
             election_timeout_min: default_election_timeout_min(),
             election_timeout_max: default_election_timeout_max(),
             max_payload_entries: default_max_payload_entries(),
+            to_voter_threshold: default_to_voter_threshold(),
         }
     }
 }
@@ -37,4 +40,8 @@ fn default_election_timeout_max() -> u64 {
 
 fn default_max_payload_entries() -> usize {
     1000
+}
+
+fn default_to_voter_threshold() -> usize {
+    100
 }

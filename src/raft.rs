@@ -30,7 +30,8 @@ where
     ) -> Result<Self> {
         let (core, tx) = Core::new(name, id, config, storage, network)?;
         let join_handle = spawn(async move {
-            if let Err(err) = core.await {
+            let err = core.await;
+            if !matches!(err, RaftError::Shutdown) {
                 error!(
                     error = %err,
                     "Raft error",
@@ -93,7 +94,31 @@ where
         rx.await.map_err(|_| RaftError::Shutdown)?
     }
 
-    pub async fn metrics(&self) -> Result<Metrics> {
+    pub async fn add_non_voter(&self, id: NodeId, info: N) -> Result<()> {
+        let (tx, rx) = oneshot::channel();
+        self.tx
+            .clone()
+            .send(Message::AddNode {
+                id,
+                info,
+                reply: tx,
+            })
+            .await
+            .map_err(|_| RaftError::Shutdown)?;
+        rx.await.map_err(|_| RaftError::Shutdown)?
+    }
+
+    pub async fn remove_node(&self, id: NodeId) -> Result<()> {
+        let (tx, rx) = oneshot::channel();
+        self.tx
+            .clone()
+            .send(Message::RemoveNode { id, reply: tx })
+            .await
+            .map_err(|_| RaftError::Shutdown)?;
+        rx.await.map_err(|_| RaftError::Shutdown)?
+    }
+
+    pub async fn metrics(&self) -> Result<Metrics<N>> {
         let (tx, rx) = oneshot::channel();
         self.tx
             .clone()

@@ -16,7 +16,7 @@ pub struct InitialState<N> {
     pub last_log_index: u64,
     pub last_log_term: u64,
     pub hard_state: Option<HardState>,
-    pub membership: MemberShipConfig<N>,
+    pub membership: Option<MemberShipConfig<N>>,
 }
 
 pub trait Storage<N, D>: Send + Sync + 'static {

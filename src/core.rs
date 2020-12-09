@@ -17,9 +17,9 @@ use crate::message::Message;
 use crate::ordered_group::OrderedGroup;
 use crate::runtime::Delay;
 use crate::{
-    AppendEntriesRequest, AppendEntriesResponse, Config, Entry, EntryDetail, HardState,
+    AppendEntriesRequest, AppendEntriesResponse, Config, Entry, EntryDetail, HardState, LogIndex,
     MemberShipConfig, Metrics, Network, NetworkResult, NodeId, RaftError, Result, Role, Storage,
-    VoteRequest, VoteResponse,
+    TermId, VoteRequest, VoteResponse,
 };
 
 const MESSAGE_CHANNEL_SIZE: usize = 32;
@@ -110,13 +110,19 @@ where
             core.voted_for = hard_state.voted_for;
         }
 
-        if core.last_log_index > 0 {
-            core.role = Role::Follower;
-            core.reset_election_timeout();
+        if let Some(membership) = initial_state.membership {
+            if membership.is_non_voter(id) {
+                core.role = Role::NonVoter;
+            } else if membership.is_member(id) {
+                core.role = Role::Follower;
+                core.reset_election_timeout();
+            } else {
+                return Err(RaftError::UnknownNode(id));
+            }
         }
 
         debug!(
-            name = core.name.as_str(),
+            name = %core.name,
             id = core.id,
             last_log_index = core.last_log_index,
             last_log_term = core.last_log_term,
@@ -185,7 +191,7 @@ where
         };
 
         debug!(
-            name = self.name.as_str(),
+            name = %self.name,
             id = self.id,
             target = target,
             term = append_entries.term,
@@ -238,7 +244,7 @@ where
 
     fn switch_to_follower(&mut self, term: u64) -> Result<()> {
         debug!(
-            name = self.name.as_str(),
+            name = %self.name,
             id = self.id,
             "Become to follower",
         );
@@ -266,7 +272,7 @@ where
             self.leader = None;
             if self.role == Role::Follower {
                 debug!(
-                    name = self.name.as_str(),
+                    name = %self.name,
                     id = self.id,
                     current_term = self.current_term,
                     "Become to candidate",
@@ -290,7 +296,7 @@ where
                     last_log_term: self.last_log_term,
                 };
                 debug!(
-                    name = self.name.as_str(),
+                    name = %self.name,
                     id = self.id,
                     target = target,
                     term = self.current_term,
@@ -312,7 +318,7 @@ where
 
     fn handle_append_entries_response(
         &mut self,
-        (from, term, last_log_index, resp): (u64, u64, u64, AppendEntriesResponse),
+        (from, term, last_log_index, resp): (NodeId, TermId, LogIndex, AppendEntriesResponse),
     ) -> Result<()> {
         if term != self.current_term {
             return Ok(());
@@ -327,6 +333,15 @@ where
             let next_index = self.next_index.get_mut(&from).unwrap();
             *next_index = last_log_index + 1;
             *self.match_index.get_mut(&from).unwrap() = last_log_index;
+            if self.membership.is_non_voter(from)
+                && (self.last_log_index + 1) - *next_index < self.config.to_voter_threshold as u64
+            {
+                // Convert this member from non-voter to follower
+                self.append_entry(
+                    EntryDetail::ChangeMemberShip(self.membership.convert_voter_to_follower(from)),
+                    None,
+                )?;
+            }
         } else {
             let next_index = self.next_index.get_mut(&from).unwrap();
             if *next_index > 1 {
@@ -336,7 +351,10 @@ where
         Ok(())
     }
 
-    fn handle_vote_response(&mut self, (from, term, resp): (u64, u64, VoteResponse)) -> Result<()> {
+    fn handle_vote_response(
+        &mut self,
+        (from, term, resp): (NodeId, TermId, VoteResponse),
+    ) -> Result<()> {
         if term != self.current_term || self.role != Role::Candidate {
             return Ok(());
         }
@@ -353,7 +371,7 @@ where
 
     fn become_to_leader(&mut self) -> Result<()> {
         debug!(
-            name = self.name.as_str(),
+            name = %self.name,
             id = self.id,
             voted = self.voted.len(),
             members = self.membership.members.len(),
@@ -398,18 +416,14 @@ where
 
         self.become_to_leader()?;
         self.append_entry(
-            Entry {
-                term: self.current_term,
-                index: self.last_log_index + 1,
-                detail: EntryDetail::ChangeMemberShip(MemberShipConfig {
-                    members: members
-                        .into_iter()
-                        .map(|(id, info)| (id, Arc::new(info)))
-                        .collect(),
-                    non_voters: Default::default(),
-                }),
-            },
-            reply,
+            EntryDetail::ChangeMemberShip(MemberShipConfig {
+                members: members
+                    .into_iter()
+                    .map(|(id, info)| (id, Arc::new(info)))
+                    .collect(),
+                non_voters: Default::default(),
+            }),
+            Some(reply),
         )
     }
 
@@ -422,7 +436,7 @@ where
         }
 
         debug!(
-            name = self.name.as_str(),
+            name = %self.name,
             id = self.id,
             current_term = self.current_term,
             term = req.term,
@@ -449,7 +463,7 @@ where
             && req.last_log_index >= self.last_log_index
         {
             debug!(
-                name = self.name.as_str(),
+                name = %self.name,
                 id = self.id,
                 candidate_id = req.candidate_id,
                 "Core::vote_for",
@@ -473,7 +487,7 @@ where
         req: AppendEntriesRequest<N, D>,
     ) -> Result<AppendEntriesResponse> {
         debug!(
-            name = self.name.as_str(),
+            name = %self.name,
             id = self.id,
             term = req.term,
             current_term = self.current_term,
@@ -493,15 +507,13 @@ where
             });
         }
 
-        if (self.role != Role::Follower && self.role != Role::NonVoter)
-            || (self.role == Role::NonVoter && self.last_log_index == 0)
-        {
+        if self.role != Role::Follower && self.role != Role::NonVoter {
             self.switch_to_follower(req.term)?;
         }
 
         if self.leader != Some(req.leader_id) {
             debug!(
-                name = self.name.as_str(),
+                name = %self.name,
                 id = self.id,
                 leader_id = req.leader_id,
                 "Core::follow to leader",
@@ -564,21 +576,30 @@ where
 
     fn append_entry(
         &mut self,
-        entry: Entry<N, D>,
-        reply: oneshot::Sender<Result<()>>,
+        entry_detail: EntryDetail<N, D>,
+        reply: Option<oneshot::Sender<Result<()>>>,
     ) -> Result<()> {
         if self.role != Role::Leader {
-            reply
-                .send(Err(RaftError::ForwardToLeader(self.leader)))
-                .ok();
+            if let Some(reply) = reply {
+                reply
+                    .send(Err(RaftError::ForwardToLeader(self.leader)))
+                    .ok();
+            }
             return Ok(());
         }
 
-        debug!(term = entry.term, index = entry.index, "Core::append_entry",);
-        let res = self
-            .pending_write
-            .insert(entry.index, std::iter::once(reply).collect());
-        assert!(res.is_none());
+        let entry = Entry {
+            term: self.current_term,
+            index: self.last_log_index + 1,
+            detail: entry_detail,
+        };
+        debug!(term = entry.term, index = entry.index, "Core::append_entry");
+        if let Some(reply) = reply {
+            let res = self
+                .pending_write
+                .insert(entry.index, std::iter::once(reply).collect());
+            assert!(res.is_none());
+        }
         self.storage
             .append_entries_to_log(&[entry])
             .map_err(RaftError::Storage)?;
@@ -589,28 +610,33 @@ where
     }
 
     fn handle_client_read(&mut self, reply: oneshot::Sender<Result<()>>) -> Result<()> {
-        self.append_entry(
-            Entry {
-                term: self.current_term,
-                index: self.last_log_index + 1,
-                detail: EntryDetail::Blank,
-            },
-            reply,
-        )
+        self.append_entry(EntryDetail::Blank, Some(reply))
     }
 
     fn handle_client_write(&mut self, action: D, reply: oneshot::Sender<Result<()>>) -> Result<()> {
+        self.append_entry(EntryDetail::Normal(action), Some(reply))
+    }
+
+    fn handle_add_node(
+        &mut self,
+        id: NodeId,
+        info: N,
+        reply: oneshot::Sender<Result<()>>,
+    ) -> Result<()> {
         self.append_entry(
-            Entry {
-                term: self.current_term,
-                index: self.last_log_index + 1,
-                detail: EntryDetail::Normal(action),
-            },
-            reply,
+            EntryDetail::ChangeMemberShip(self.membership.add_non_voter(id, info)?),
+            Some(reply),
         )
     }
 
-    fn handle_metrics(&self) -> Result<Metrics> {
+    fn handle_remove_node(&mut self, id: NodeId, reply: oneshot::Sender<Result<()>>) -> Result<()> {
+        self.append_entry(
+            EntryDetail::ChangeMemberShip(self.membership.remove_node(id)?),
+            Some(reply),
+        )
+    }
+
+    fn handle_metrics(&self) -> Result<Metrics<N>> {
         Ok(Metrics {
             id: self.id,
             role: self.role,
@@ -619,45 +645,48 @@ where
             last_applied: self.storage.last_applied().unwrap(),
             has_leader: self.leader.is_some(),
             current_leader: self.leader.unwrap_or_default(),
+            membership: self.membership.clone(),
         })
     }
 
-    fn handle_message(&mut self, msg: Message<N, D>) -> Result<bool> {
+    fn handle_message(&mut self, msg: Message<N, D>) -> Result<()> {
         match msg {
             Message::Initialize { members, reply } => {
                 self.handle_initialize(members, reply)?;
-                Ok(true)
+                Ok(())
             }
             Message::Vote { req, reply } => {
                 reply.send(self.handle_vote(req)).ok();
-                Ok(true)
+                Ok(())
             }
             Message::AppendEntries { req, reply } => {
                 reply.send(self.handle_append_entries(req)).ok();
-                Ok(true)
+                Ok(())
             }
             Message::ClientRead { reply } => {
                 self.handle_client_read(reply)?;
-                Ok(true)
+                Ok(())
             }
             Message::ClientWrite {
                 action: actions,
                 reply,
             } => {
                 self.handle_client_write(actions, reply)?;
-                Ok(true)
+                Ok(())
             }
-            Message::AddNode { .. } => {
-                todo!()
+            Message::AddNode { id, info, reply } => {
+                self.handle_add_node(id, info, reply)?;
+                Ok(())
             }
-            Message::RemoveNode { .. } => {
-                todo!()
+            Message::RemoveNode { id, reply } => {
+                self.handle_remove_node(id, reply)?;
+                Ok(())
             }
             Message::Metrics { reply } => {
                 reply.send(self.handle_metrics()).ok();
-                Ok(true)
+                Ok(())
             }
-            Message::Shutdown => Ok(false),
+            Message::Shutdown => Err(RaftError::Shutdown),
         }
     }
 
@@ -680,7 +709,7 @@ where
         if self.membership.members.len() == 1 && self.last_log_index > self.commit_index {
             self.commit_index = self.last_log_index;
             debug!(
-                name = self.name.as_str(),
+                name = %self.name,
                 id = self.id,
                 commit_index = self.commit_index,
                 "Core::commit_index",
@@ -697,7 +726,7 @@ where
             {
                 self.commit_index = *idx;
                 debug!(
-                    name = self.name.as_str(),
+                    name = %self.name,
                     id = self.id,
                     commit_index = self.commit_index,
                     "Core::commit_index",
@@ -715,11 +744,34 @@ where
                 .get_log_entries(last_applied + 1, self.commit_index + 1)
                 .map_err(RaftError::Storage)?;
 
-            for entry in 
+            for entry in &entries {
+                if let EntryDetail::ChangeMemberShip(membership) = &entry.detail {
+                    self.membership = membership.clone();
+                    if self.role == Role::NonVoter && self.membership.members.contains_key(&self.id)
+                    {
+                        debug!(
+                            name = %self.name,
+                            id = self.id,
+                            "Switch role from non-voter to follower",
+                        );
+                        self.role = Role::Follower;
+                        self.reset_election_timeout();
+                    } else if !self.membership.is_member(self.id)
+                        && !self.membership.is_non_voter(self.id)
+                    {
+                        debug!(
+                            name = %self.name,
+                            id = self.id,
+                            "Exit from cluster.",
+                        );
+                        return Err(RaftError::Shutdown);
+                    }
+                }
+            }
 
             if !entries.is_empty() {
                 debug!(
-                    name = self.name.as_str(),
+                    name = %self.name,
                     id = self.id,
                     from = last_applied + 1,
                     to = entries.last().unwrap().index + 1,
@@ -742,7 +794,7 @@ where
     N: Send + Sync + Unpin + 'static,
     D: Send + Unpin + 'static,
 {
-    type Output = Result<()>;
+    type Output = RaftError;
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let this = &mut *self;
@@ -758,7 +810,7 @@ where
                 if this.role == Role::Leader {
                     this.reset_heartbeat_timeout();
                     if let Err(err) = this.send_append_entries() {
-                        return Poll::Ready(Err(err));
+                        return Poll::Ready(err);
                     }
                 } else {
                     this.heartbeat_timeout = None;
@@ -775,7 +827,7 @@ where
                 );
                 if let Role::Follower | Role::Candidate = this.role {
                     if let Err(err) = this.handle_election_timeout() {
-                        return Poll::Ready(Err(err));
+                        return Poll::Ready(err);
                     }
                 } else {
                     this.election_timeout = None;
@@ -790,7 +842,7 @@ where
                 let remove = match fut.poll_unpin(cx) {
                     Poll::Ready(Ok(resp)) => {
                         if let Err(err) = this.handle_append_entries_response(resp) {
-                            return Poll::Ready(Err(err));
+                            return Poll::Ready(err);
                         }
                         true
                     }
@@ -815,7 +867,7 @@ where
                 {
                     if let Some(member_info) = this.membership.member_info(id) {
                         if let Err(err) = this.do_send_entries(id, member_info) {
-                            return Poll::Ready(Err(err));
+                            return Poll::Ready(err);
                         }
                         this.next_append_entries_futures.insert(id, false);
                     }
@@ -827,7 +879,7 @@ where
             match this.vote_futures.poll_next_unpin(cx) {
                 Poll::Ready(Some(Ok(resp))) => {
                     if let Err(err) = this.handle_vote_response(resp) {
-                        return Poll::Ready(Err(err));
+                        return Poll::Ready(err);
                     }
                 }
                 Poll::Ready(Some(Err(_err))) => {
@@ -843,17 +895,14 @@ where
 
         loop {
             match this.rx.poll_next_unpin(cx) {
-                Poll::Ready(Some(msg)) => match this.handle_message(msg) {
-                    Ok(res) => {
-                        if !res {
-                            return Poll::Ready(Ok(()));
-                        }
+                Poll::Ready(Some(msg)) => {
+                    if let Err(err) = this.handle_message(msg) {
+                        return Poll::Ready(err);
                     }
-                    Err(err) => return Poll::Ready(Err(err)),
-                },
+                }
                 Poll::Ready(None) => {
                     // Raft is shutdown
-                    return Poll::Ready(Ok(()));
+                    return Poll::Ready(RaftError::Shutdown);
                 }
                 Poll::Pending => break,
             }
@@ -864,13 +913,13 @@ where
             match self.apply_to_state_machine_if_needed() {
                 Ok(Some(last_id)) => self.reply_client_write(last_id + 1, || Ok(())),
                 Ok(None) => {}
-                Err(err) => return Poll::Ready(Err(err)),
+                Err(err) => return Poll::Ready(err),
             }
         } else {
             let leader = this.leader;
             this.reply_client_write(u64::MAX, || Err(RaftError::ForwardToLeader(leader)));
             if let Err(err) = self.apply_to_state_machine_if_needed() {
-                return Poll::Ready(Err(err));
+                return Poll::Ready(err);
             }
         }
 

@@ -34,7 +34,7 @@ pub enum Message<N, D> {
         reply: oneshot::Sender<Result<()>>,
     },
     Metrics {
-        reply: oneshot::Sender<Result<Metrics>>,
+        reply: oneshot::Sender<Result<Metrics<N>>>,
     },
     Shutdown,
 }
