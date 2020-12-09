@@ -18,5 +18,5 @@ pub use network::{
     AppendEntriesRequest, AppendEntriesResponse, Network, NetworkResult, VoteRequest, VoteResponse,
 };
 pub use raft::Raft;
-pub use storage::{HardState, Storage, StorageResult};
+pub use storage::{HardState, InitialState, Storage, StorageResult};
 pub use types::{Entry, EntryDetail, LogIndex, MemberShipConfig, Metrics, NodeId, Role, TermId};

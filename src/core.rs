@@ -101,7 +101,7 @@ where
         let initial_state = core
             .storage
             .get_initial_state()
-            .map_err(RaftError::Storage)?;
+            .map_err(RaftError::storage)?;
         core.last_log_index = initial_state.last_log_index;
         core.last_log_term = initial_state.last_log_term;
 
@@ -127,7 +127,7 @@ where
             last_log_index = core.last_log_index,
             last_log_term = core.last_log_term,
             current_term = core.current_term,
-            last_applied = core.storage.last_applied().map_err(RaftError::Storage)?,
+            last_applied = core.storage.last_applied().map_err(RaftError::storage)?,
             role = ?core.role,
             "Initialize raft",
         );
@@ -164,7 +164,7 @@ where
                 let mut entries = self
                     .storage
                     .get_log_entries(start, end)
-                    .map_err(RaftError::Storage)?;
+                    .map_err(RaftError::storage)?;
                 let prev = entries.remove(0);
                 (prev.index, prev.term, entries)
             }
@@ -175,7 +175,7 @@ where
                         next_index,
                         next_index + self.config.max_payload_entries as u64,
                     )
-                    .map_err(RaftError::Storage)?;
+                    .map_err(RaftError::storage)?;
                 (0, 0, entries)
             }
             _ => unreachable!(),
@@ -256,7 +256,7 @@ where
                     current_term: term,
                     voted_for: self.voted_for,
                 })
-                .map_err(RaftError::Storage)?;
+                .map_err(RaftError::storage)?;
         }
         self.leader = None;
         self.heartbeat_timeout = None;
@@ -284,7 +284,7 @@ where
                     current_term: self.current_term,
                     voted_for: self.voted_for,
                 })
-                .map_err(RaftError::Storage)?;
+                .map_err(RaftError::storage)?;
             self.reset_election_timeout();
 
             for (target, target_info) in self.membership.other_voter_members(self.id) {
@@ -414,15 +414,17 @@ where
             "Core::initialize",
         );
 
+        self.membership = MemberShipConfig {
+            members: members
+                .into_iter()
+                .map(|(id, info)| (id, Arc::new(info)))
+                .collect(),
+            non_voters: Default::default(),
+        };
         self.become_to_leader()?;
+        self.reset_heartbeat_timeout();
         self.append_entry(
-            EntryDetail::ChangeMemberShip(MemberShipConfig {
-                members: members
-                    .into_iter()
-                    .map(|(id, info)| (id, Arc::new(info)))
-                    .collect(),
-                non_voters: Default::default(),
-            }),
+            EntryDetail::ChangeMemberShip(self.membership.clone()),
             Some(reply),
         )
     }
@@ -539,7 +541,7 @@ where
             match self
                 .storage
                 .get_log_entries(self.last_log_index, self.last_log_index + 1)
-                .map_err(RaftError::Storage)?
+                .map_err(RaftError::storage)?
                 .into_iter()
                 .next()
             {
@@ -548,7 +550,7 @@ where
                     // existing entry and all that follow it
                     self.storage
                         .delete_logs_from(log.index, None)
-                        .map_err(RaftError::Storage)?;
+                        .map_err(RaftError::storage)?;
                 }
                 Some(_) => {}
                 None => {
@@ -564,7 +566,7 @@ where
         // Append any new entries not already in the log
         self.storage
             .append_entries_to_log(&req.entries)
-            .map_err(RaftError::Storage)?;
+            .map_err(RaftError::storage)?;
         self.last_log_index = req.entries.last().unwrap().index;
         self.last_log_term = req.entries.last().unwrap().term;
 
@@ -602,7 +604,7 @@ where
         }
         self.storage
             .append_entries_to_log(&[entry])
-            .map_err(RaftError::Storage)?;
+            .map_err(RaftError::storage)?;
         self.last_log_index += 1;
         self.send_append_entries()?;
 
@@ -737,12 +739,12 @@ where
     }
 
     fn apply_to_state_machine_if_needed(&mut self) -> Result<Option<u64>> {
-        let last_applied = self.storage.last_applied().map_err(RaftError::Storage)?;
+        let last_applied = self.storage.last_applied().map_err(RaftError::storage)?;
         if self.commit_index > last_applied {
             let entries = self
                 .storage
                 .get_log_entries(last_applied + 1, self.commit_index + 1)
-                .map_err(RaftError::Storage)?;
+                .map_err(RaftError::storage)?;
 
             for entry in &entries {
                 if let EntryDetail::ChangeMemberShip(membership) = &entry.detail {
@@ -780,7 +782,7 @@ where
                 );
                 self.storage
                     .apply_entries_to_state_machine(&entries)
-                    .map_err(RaftError::Storage)?;
+                    .map_err(RaftError::storage)?;
             }
             Ok(entries.last().map(|entry| entry.index + 1))
         } else {

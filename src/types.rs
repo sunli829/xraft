@@ -10,6 +10,7 @@ pub type TermId = u64;
 pub type LogIndex = u64;
 
 #[derive(Debug, Serialize, Deserialize, Copy, Clone, Eq, PartialEq)]
+#[non_exhaustive]
 pub enum Role {
     Follower,
     Candidate,
@@ -114,14 +115,16 @@ impl<N> MemberShipConfig<N> {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[non_exhaustive]
 pub enum EntryDetail<N, D> {
     Normal(D),
     Blank,
     ChangeMemberShip(MemberShipConfig<N>),
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[non_exhaustive]
 pub struct Entry<N, D> {
     pub term: TermId,
     pub index: LogIndex,
@@ -129,6 +132,7 @@ pub struct Entry<N, D> {
 }
 
 #[derive(Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct Metrics<N> {
     pub id: NodeId,
     pub role: Role,

@@ -1,7 +1,8 @@
 use std::sync::Arc;
 
 use futures::channel::{mpsc, oneshot};
-use futures::SinkExt;
+use futures::future::Shared;
+use futures::{FutureExt, SinkExt};
 
 use crate::core::Core;
 use crate::message::Message;
@@ -13,7 +14,16 @@ use crate::{
 
 pub struct Raft<N, D> {
     tx: mpsc::Sender<Message<N, D>>,
-    join_handle: JoinHandle<()>,
+    join_handle: Shared<JoinHandle<RaftError>>,
+}
+
+impl<N, D> Clone for Raft<N, D> {
+    fn clone(&self) -> Self {
+        Self {
+            tx: self.tx.clone(),
+            join_handle: self.join_handle.clone(),
+        }
+    }
 }
 
 impl<N, D> Raft<N, D>
@@ -31,21 +41,35 @@ where
         let (core, tx) = Core::new(name, id, config, storage, network)?;
         let join_handle = spawn(async move {
             let err = core.await;
-            if !matches!(err, RaftError::Shutdown) {
+            if !err.is_shutdown() {
                 error!(
                     error = %err,
                     "Raft error",
                 );
+            } else {
+                debug!(id = id, "Node shutdown");
             }
-        });
+            err
+        })
+        .shared();
         Ok(Self { tx, join_handle })
     }
 
-    pub async fn initialize(&self, members: Vec<(NodeId, N)>) -> Result<()> {
+    pub async fn wait_for_end(&self) -> Result<()> {
+        match self.join_handle.clone().await {
+            RaftError::Shutdown => Ok(()),
+            err => Err(err),
+        }
+    }
+
+    pub async fn initialize(&self, members: impl IntoIterator<Item = (NodeId, N)>) -> Result<()> {
         let (tx, rx) = oneshot::channel();
         self.tx
             .clone()
-            .send(Message::Initialize { members, reply: tx })
+            .send(Message::Initialize {
+                members: members.into_iter().collect(),
+                reply: tx,
+            })
             .await
             .map_err(|_| RaftError::Shutdown)?;
         rx.await.map_err(|_| RaftError::Shutdown)?

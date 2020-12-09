@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::types::MemberShipConfig;
-use crate::{Entry, NodeId};
+use crate::{Entry, LogIndex, NodeId};
 
 pub type StorageResult<T> = anyhow::Result<T>;
 
@@ -26,9 +26,9 @@ pub trait Storage<N, D>: Send + Sync + 'static {
 
     fn last_applied(&self) -> StorageResult<u64>;
 
-    fn get_log_entries(&self, start: u64, end: u64) -> StorageResult<Vec<Entry<N, D>>>;
+    fn get_log_entries(&self, start: LogIndex, end: LogIndex) -> StorageResult<Vec<Entry<N, D>>>;
 
-    fn delete_logs_from(&self, start: u64, end: Option<u64>) -> StorageResult<()>;
+    fn delete_logs_from(&self, start: LogIndex, end: Option<LogIndex>) -> StorageResult<()>;
 
     fn append_entries_to_log(&self, entries: &[Entry<N, D>]) -> StorageResult<()>;
 
