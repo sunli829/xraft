@@ -1,6 +1,11 @@
 mod test_raft;
 
+use std::time::Duration;
+
+use futures::StreamExt;
 use test_raft::TestHarness;
+
+use crate::test_raft::Action;
 
 #[tokio::test]
 async fn client_writes() {
@@ -9,4 +14,38 @@ async fn client_writes() {
     test.add_node(2);
     test.add_node(3);
     test.initialize().await.unwrap();
+    tokio::time::sleep(Duration::from_secs(3)).await;
+
+    futures::stream::iter(0..4)
+        .for_each_concurrent(None, {
+            let test = test.clone();
+            move |t| {
+                let test = test.clone();
+                async move {
+                    for i in 0..1000 {
+                        test.write(Action::put(format!("{}/{}", t, i), i))
+                            .await
+                            .unwrap();
+                    }
+                }
+            }
+        })
+        .await;
+
+    for t in 0..4 {
+        for i in 0..1000 {
+            assert_eq!(test.read(format!("{}/{}", t, i)).await.unwrap(), Some(i));
+        }
+    }
+
+    for n in 1..=3 {
+        for t in 0..4 {
+            for i in 0..1000 {
+                assert_eq!(
+                    test.read_from(n, format!("{}/{}", t, i)).await.unwrap(),
+                    Some(i)
+                );
+            }
+        }
+    }
 }

@@ -139,7 +139,6 @@ pub struct Metrics<N> {
     pub current_term: TermId,
     pub last_log_index: LogIndex,
     pub last_applied: LogIndex,
-    pub has_leader: bool,
-    pub current_leader: NodeId,
+    pub leader: Option<NodeId>,
     pub membership: MemberShipConfig<N>,
 }

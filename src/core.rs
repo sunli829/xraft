@@ -200,7 +200,7 @@ where
             prev_log_term = append_entries.prev_log_term,
             leader_commit = append_entries.leader_commit,
             entries = append_entries.entries.len(),
-            "Core::send_append_entries",
+            "send_append_entries",
         );
 
         let last_log_index = append_entries.prev_log_index + append_entries.entries.len() as u64;
@@ -411,7 +411,7 @@ where
             term = self.current_term,
             index = self.last_log_index,
             members = members.len(),
-            "Core::initialize",
+            "initialize",
         );
 
         self.membership = MemberShipConfig {
@@ -445,7 +445,7 @@ where
             candidate_id = req.candidate_id,
             last_log_index = req.last_log_index,
             last_log_term = req.last_log_term,
-            "Core::handle_vote",
+            "handle_vote",
         );
 
         if req.term < self.current_term {
@@ -468,7 +468,7 @@ where
                 name = %self.name,
                 id = self.id,
                 candidate_id = req.candidate_id,
-                "Core::vote_for",
+                "vote_for",
             );
             self.voted_for = Some(req.candidate_id);
             self.reset_election_timeout();
@@ -498,7 +498,7 @@ where
             prev_log_term = req.prev_log_term,
             leader_commit = req.leader_commit,
             entries = req.entries.len(),
-            "Core::handle_append_entries",
+            "handle_append_entries",
         );
 
         if req.term < self.current_term {
@@ -518,7 +518,7 @@ where
                 name = %self.name,
                 id = self.id,
                 leader_id = req.leader_id,
-                "Core::follow to leader",
+                "follow to leader",
             );
             self.leader = Some(req.leader_id);
         }
@@ -595,7 +595,7 @@ where
             index: self.last_log_index + 1,
             detail: entry_detail,
         };
-        debug!(term = entry.term, index = entry.index, "Core::append_entry");
+        debug!(term = entry.term, index = entry.index, "append_entry");
         if let Some(reply) = reply {
             let res = self
                 .pending_write
@@ -616,6 +616,11 @@ where
     }
 
     fn handle_client_write(&mut self, action: D, reply: oneshot::Sender<Result<()>>) -> Result<()> {
+        debug!(
+            name = %self.name,
+            id = self.id,
+            "client_write",
+        );
         self.append_entry(EntryDetail::Normal(action), Some(reply))
     }
 
@@ -625,6 +630,7 @@ where
         info: N,
         reply: oneshot::Sender<Result<()>>,
     ) -> Result<()> {
+        debug!(id = id, "Add non-voter");
         self.append_entry(
             EntryDetail::ChangeMemberShip(self.membership.add_non_voter(id, info)?),
             Some(reply),
@@ -645,8 +651,7 @@ where
             current_term: self.current_term,
             last_log_index: self.last_log_index,
             last_applied: self.storage.last_applied().unwrap(),
-            has_leader: self.leader.is_some(),
-            current_leader: self.leader.unwrap_or_default(),
+            leader: self.leader,
             membership: self.membership.clone(),
         })
     }
@@ -714,7 +719,7 @@ where
                 name = %self.name,
                 id = self.id,
                 commit_index = self.commit_index,
-                "Core::commit_index",
+                "commit_index",
             );
             return;
         }
@@ -731,7 +736,7 @@ where
                     name = %self.name,
                     id = self.id,
                     commit_index = self.commit_index,
-                    "Core::commit_index",
+                    "commit_index",
                 );
                 break;
             }
@@ -778,7 +783,7 @@ where
                     from = last_applied + 1,
                     to = entries.last().unwrap().index + 1,
                     entries = entries.len(),
-                    "Core::apply_to_state_machine",
+                    "apply_to_state_machine",
                 );
                 self.storage
                     .apply_entries_to_state_machine(&entries)
@@ -804,11 +809,7 @@ where
 
         if let Some(heartbeat_timeout) = &mut this.heartbeat_timeout {
             if let Poll::Ready(_) = heartbeat_timeout.poll_unpin(cx) {
-                debug!(
-                    name = this.name.as_str(),
-                    id = this.id,
-                    "Core::heartbeat_timeout"
-                );
+                debug!(name = this.name.as_str(), id = this.id, "heartbeat_timeout");
                 if this.role == Role::Leader {
                     this.reset_heartbeat_timeout();
                     if let Err(err) = this.send_append_entries() {
@@ -822,11 +823,7 @@ where
 
         if let Some(election_timeout) = &mut this.election_timeout {
             if let Poll::Ready(_) = election_timeout.poll_unpin(cx) {
-                debug!(
-                    name = this.name.as_str(),
-                    id = this.id,
-                    "Core::election_timeout",
-                );
+                debug!(name = this.name.as_str(), id = this.id, "election_timeout",);
                 if let Role::Follower | Role::Candidate = this.role {
                     if let Err(err) = this.handle_election_timeout() {
                         return Poll::Ready(err);

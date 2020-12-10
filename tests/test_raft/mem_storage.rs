@@ -21,6 +21,12 @@ pub struct MemoryStorage {
     inner: RwLock<Inner>,
 }
 
+impl MemoryStorage {
+    pub fn get(&self, key: impl AsRef<str>) -> Option<i32> {
+        self.inner.read().kvs.get(key.as_ref()).copied()
+    }
+}
+
 impl Storage<(), Action> for MemoryStorage {
     fn get_initial_state(&self) -> StorageResult<InitialState<()>> {
         let inner = self.inner.read();
@@ -92,6 +98,7 @@ impl Storage<(), Action> for MemoryStorage {
                 }
             }
         }
+        inner.last_applied = entries.last().unwrap().index;
         Ok(())
     }
 }

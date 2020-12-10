@@ -1,14 +1,14 @@
 mod mem_storage;
 mod test_network;
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 use mem_storage::MemoryStorage;
 use parking_lot::RwLock;
 use test_network::TestNetwork;
 use tracing_subscriber::layer::SubscriberExt;
-use xraft::{Config, NodeId, Raft, Result, Storage};
+use xraft::{Config, Metrics, NodeId, Raft, RaftError, Result};
 
 #[derive(Debug, Clone)]
 pub enum Action {
@@ -16,15 +16,27 @@ pub enum Action {
     Delete(String),
 }
 
-#[derive(Clone)]
-pub struct Member {
-    pub raft: Raft<(), Action>,
-    pub storage: Arc<dyn Storage<(), Action>>,
+impl Action {
+    pub fn put(key: impl Into<String>, value: i32) -> Self {
+        Self::Put(key.into(), value)
+    }
+
+    pub fn delete(key: impl Into<String>) -> Self {
+        Self::Delete(key.into())
+    }
 }
 
+#[derive(Clone)]
+pub struct Node {
+    pub raft: Raft<(), Action>,
+    pub storage: Arc<MemoryStorage>,
+}
+
+#[derive(Clone)]
 pub struct TestHarness {
     config: Arc<Config>,
-    nodes: Arc<RwLock<HashMap<NodeId, Member>>>,
+    nodes: Arc<RwLock<BTreeMap<NodeId, Node>>>,
+    isolated_nodes: Arc<RwLock<BTreeSet<NodeId>>>,
     network: Arc<TestNetwork>,
 }
 
@@ -40,6 +52,7 @@ impl Default for TestHarness {
         Self {
             config,
             nodes: network.nodes.clone(),
+            isolated_nodes: Default::default(),
             network,
         }
     }
@@ -57,7 +70,7 @@ impl TestHarness {
             self.network.clone(),
         )
         .unwrap();
-        nodes.insert(id, Member { raft, storage });
+        nodes.insert(id, Node { raft, storage });
     }
 
     pub async fn initialize(&self) -> Result<()> {
@@ -66,5 +79,66 @@ impl TestHarness {
         let raft = &nodes.iter().next().unwrap().1.raft.clone();
         raft.initialize(nodes.keys().map(|id| (*id, ()))).await?;
         Ok(())
+    }
+
+    pub async fn add_non_voter(&self, id: NodeId) -> Result<()> {
+        let nodes = self.nodes.read();
+        let mut leader = *nodes.keys().next().unwrap();
+        loop {
+            let node = nodes.get(&leader).unwrap();
+            match node.raft.add_non_voter(id, ()).await {
+                Ok(()) => break,
+                Err(RaftError::ForwardToLeader(Some(forward_to))) => leader = forward_to,
+                Err(err) => return Err(err),
+            }
+        }
+        Ok(())
+    }
+
+    pub async fn metrics(&self, id: NodeId) -> Result<Metrics<()>> {
+        let nodes = self.nodes.read();
+        let node = nodes.get(&id).unwrap();
+        node.raft.metrics().await
+    }
+
+    pub async fn isolate_node(&self, id: NodeId) {
+        self.isolated_nodes.write().insert(id);
+    }
+
+    pub async fn restore_node(&self, id: NodeId) {
+        self.isolated_nodes.write().remove(&id);
+    }
+
+    pub async fn write(&self, action: Action) -> Result<()> {
+        let nodes = self.nodes.read();
+        let mut leader = *nodes.keys().next().unwrap();
+        loop {
+            let node = nodes.get(&leader).unwrap();
+            match node.raft.client_write(action.clone()).await {
+                Ok(()) => break,
+                Err(RaftError::ForwardToLeader(Some(forward_to))) => leader = forward_to,
+                Err(err) => return Err(err),
+            }
+        }
+        Ok(())
+    }
+
+    pub async fn read(&self, key: impl AsRef<str>) -> Result<Option<i32>> {
+        let nodes = self.nodes.read();
+        let mut leader = *nodes.keys().next().unwrap();
+        loop {
+            let node = nodes.get(&leader).unwrap();
+            match node.raft.client_read().await {
+                Ok(()) => return Ok(node.storage.get(key)),
+                Err(RaftError::ForwardToLeader(Some(forward_to))) => leader = forward_to,
+                Err(err) => return Err(err),
+            }
+        }
+    }
+
+    pub async fn read_from(&self, target: NodeId, key: impl AsRef<str>) -> Result<Option<i32>> {
+        let nodes = self.nodes.read();
+        let node = nodes.get(&target).unwrap();
+        Ok(node.storage.get(key))
     }
 }

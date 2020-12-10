@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 use parking_lot::RwLock;
@@ -7,11 +7,12 @@ use xraft::{
     VoteResponse,
 };
 
-use super::{Action, Member};
+use super::{Action, Node};
 
 #[derive(Default)]
 pub struct TestNetwork {
-    pub nodes: Arc<RwLock<HashMap<NodeId, Member>>>,
+    pub nodes: Arc<RwLock<BTreeMap<NodeId, Node>>>,
+    pub isolated_nodes: Arc<RwLock<BTreeSet<NodeId>>>,
 }
 
 #[async_trait::async_trait]
@@ -23,6 +24,11 @@ impl Network<(), Action> for TestNetwork {
         req: VoteRequest,
     ) -> NetworkResult<VoteResponse> {
         let node = self.nodes.read().get(&target).cloned().unwrap();
+        anyhow::ensure!(
+            !self.isolated_nodes.read().contains(&target),
+            "Node '{}' is isolated",
+            target
+        );
         Ok(node.raft.vote(req).await?)
     }
 
@@ -33,6 +39,11 @@ impl Network<(), Action> for TestNetwork {
         req: AppendEntriesRequest<(), Action>,
     ) -> NetworkResult<AppendEntriesResponse> {
         let node = self.nodes.read().get(&target).cloned().unwrap();
+        anyhow::ensure!(
+            !self.isolated_nodes.read().contains(&target),
+            "Node '{}' is isolated",
+            target
+        );
         Ok(node.raft.append_entries(req).await?)
     }
 }
