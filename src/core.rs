@@ -231,12 +231,13 @@ where
         }
 
         for (target, target_info) in self.membership.other_members(self.id) {
-            let append_entries_futures = self.append_entries_futures.as_mut().unwrap();
-            if append_entries_futures.contains_key(&target) {
-                self.next_append_entries_futures.insert(target, true);
-                continue;
+            if let Some(append_entries_futures) = &mut self.append_entries_futures {
+                if !append_entries_futures.contains_key(&target) {
+                    self.do_send_entries(target, target_info)?;
+                    continue;
+                }
             }
-            self.do_send_entries(target, target_info)?;
+            self.next_append_entries_futures.insert(target, true);
         }
 
         Ok(())
@@ -337,6 +338,12 @@ where
                 && (self.last_log_index + 1) - *next_index < self.config.to_voter_threshold as u64
             {
                 // Convert this member from non-voter to follower
+                debug!(
+                    name = %self.name,
+                    id = self.id,
+                    target = from,
+                    "Change membership, switch voter to follower"
+                );
                 self.append_entry(
                     EntryDetail::ChangeMemberShip(self.membership.convert_voter_to_follower(from)),
                     None,
@@ -537,7 +544,7 @@ where
             });
         }
 
-        if self.last_log_index > 0 || self.last_log_term > 0 {
+        if self.last_log_index > 0 || req.prev_log_index > 0 {
             match self
                 .storage
                 .get_log_entries(self.last_log_index, self.last_log_index + 1)
@@ -751,27 +758,51 @@ where
                 .get_log_entries(last_applied + 1, self.commit_index + 1)
                 .map_err(RaftError::storage)?;
 
-            for entry in &entries {
-                if let EntryDetail::ChangeMemberShip(membership) = &entry.detail {
-                    self.membership = membership.clone();
-                    if self.role == Role::NonVoter && self.membership.members.contains_key(&self.id)
+            if let Some(Entry {
+                detail: EntryDetail::ChangeMemberShip(membership),
+                ..
+            }) = entries
+                .iter()
+                .rev()
+                .find(|entry| matches!(entry.detail, EntryDetail::ChangeMemberShip(_)))
+            {
+                debug!(
+                    name = %self.name,
+                    membership = %membership,
+                    "Process memberchanged"
+                );
+
+                self.membership = membership.clone();
+                if self.role == Role::NonVoter && self.membership.members.contains_key(&self.id) {
+                    debug!(
+                        name = %self.name,
+                        id = self.id,
+                        "Switch role from non-voter to follower",
+                    );
+                    self.role = Role::Follower;
+                    self.reset_election_timeout();
+                } else if !self.membership.is_member(self.id)
+                    && !self.membership.is_non_voter(self.id)
+                {
+                    println!("{}", self.membership);
+                    debug!(
+                        name = %self.name,
+                        id = self.id,
+                        "Exit from cluster.",
+                    );
+                    return Err(RaftError::Shutdown);
+                } else if self.role == Role::Leader {
+                    for id in self
+                        .membership
+                        .members
+                        .keys()
+                        .cloned()
+                        .chain(self.membership.non_voters.keys().cloned())
                     {
-                        debug!(
-                            name = %self.name,
-                            id = self.id,
-                            "Switch role from non-voter to follower",
-                        );
-                        self.role = Role::Follower;
-                        self.reset_election_timeout();
-                    } else if !self.membership.is_member(self.id)
-                        && !self.membership.is_non_voter(self.id)
-                    {
-                        debug!(
-                            name = %self.name,
-                            id = self.id,
-                            "Exit from cluster.",
-                        );
-                        return Err(RaftError::Shutdown);
+                        if !self.next_index.contains_key(&id) {
+                            self.next_index.insert(id, 1);
+                            self.match_index.insert(id, 0);
+                        }
                     }
                 }
             }

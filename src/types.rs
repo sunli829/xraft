@@ -1,7 +1,9 @@
+use std::fmt::Formatter;
 use std::sync::Arc;
 
 use fnv::FnvHashMap;
 use serde::{Deserialize, Serialize};
+use smallvec::alloc::fmt::Display;
 
 use crate::{RaftError, Result};
 
@@ -22,6 +24,15 @@ pub enum Role {
 pub struct MemberShipConfig<N> {
     pub members: FnvHashMap<NodeId, Arc<N>>,
     pub non_voters: FnvHashMap<NodeId, Arc<N>>,
+}
+
+impl<N> Display for MemberShipConfig<N> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("MemberShipConfig")
+            .field("members", &self.members.keys())
+            .field("non_voters", &self.non_voters.keys())
+            .finish()
+    }
 }
 
 impl<N> Clone for MemberShipConfig<N> {
@@ -76,10 +87,10 @@ impl<N> MemberShipConfig<N> {
     }
 
     pub(crate) fn convert_voter_to_follower(&self, id: NodeId) -> Self {
-        assert!(self.members.contains_key(&id) && !self.non_voters.contains_key(&id));
+        assert!(!self.members.contains_key(&id) && self.non_voters.contains_key(&id));
         let mut new_members = self.members.clone();
         let mut new_non_voters = self.non_voters.clone();
-        new_non_voters.extend(new_members.remove(&id).map(|info| (id, info)));
+        new_members.extend(new_non_voters.remove(&id).map(|info| (id, info)));
         Self {
             members: new_members,
             non_voters: new_non_voters,

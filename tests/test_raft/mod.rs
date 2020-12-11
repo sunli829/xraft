@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 mod mem_storage;
 mod test_network;
 

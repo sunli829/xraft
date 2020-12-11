@@ -6,7 +6,7 @@ use test_raft::{Action, TestHarness};
 use xraft::Role;
 
 #[tokio::test]
-async fn single_node() {
+async fn dynamic_member() {
     let test = TestHarness::default();
     test.add_node(1);
     test.initialize().await.unwrap();
@@ -20,5 +20,11 @@ async fn single_node() {
     test.add_node(2);
     test.add_non_voter(2).await.unwrap();
 
-    tokio::time::sleep(Duration::from_secs(3)).await;
+    tokio::time::sleep(Duration::from_secs(1)).await;
+
+    assert_eq!(test.read_from(1, "a").await.unwrap(), Some(1));
+    assert_eq!(test.read_from(1, "b").await.unwrap(), Some(2));
+
+    assert_eq!(test.read_from(2, "a").await.unwrap(), Some(1));
+    assert_eq!(test.read_from(2, "b").await.unwrap(), Some(2));
 }
