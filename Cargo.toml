@@ -4,22 +4,19 @@ version = "0.1.0"
 authors = ["Sunli <scott_s829@163.com>"]
 edition = "2018"
 
-[features]
-default = ["tokio"]
-
 [dependencies]
 async-trait = "0.1.41"
 serde = { version = "1.0", features = ["derive", "rc"] }
 anyhow = "1.0"
 rand = "0.7.3"
-futures = "0.3.5"
 thiserror = "1.0"
 tracing = "0.1.22"
 fnv = "1.0.7"
 smallvec = "1.4.2"
-tokio = { version = "0.3.5", features = ["time", "rt-multi-thread"], optional = true }
+tokio = { version = "1.2.0", features = ["time", "rt-multi-thread", "sync"] }
+futures-util = "0.3.13"
 
 [dev-dependencies]
-parking_lot = "0.11.1"
-tokio = { version = "0.3.5", features = ["rt-multi-thread", "macros"] }
 tracing-subscriber = "0.2.15"
+tokio = { version = "1.2.0", features = ["time", "rt-multi-thread", "sync", "macros"] }
+futures-util = "0.3.13"

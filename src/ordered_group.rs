@@ -1,12 +1,15 @@
+use std::future::Future;
+use std::pin::Pin;
+use std::task::{Context, Poll};
+
 use fnv::FnvHashMap;
-use futures::future::BoxFuture;
-use futures::task::{Context, Poll};
-use futures::{Future, FutureExt, Stream, StreamExt};
-use tokio::macros::support::Pin;
+use futures_util::future::BoxFuture;
+use futures_util::stream::Stream;
+use futures_util::{FutureExt, StreamExt};
 
 use crate::NodeId;
 
-type FuturesOrdered<T> = futures::stream::FuturesOrdered<BoxFuture<'static, T>>;
+type FuturesOrdered<T> = futures_util::stream::FuturesOrdered<BoxFuture<'static, T>>;
 
 pub struct OrderedGroup<T>(FnvHashMap<NodeId, FuturesOrdered<T>>);
 

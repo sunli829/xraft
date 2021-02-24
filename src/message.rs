@@ -1,4 +1,4 @@
-use futures::channel::oneshot;
+use tokio::sync::oneshot;
 
 use crate::{
     AppendEntriesRequest, AppendEntriesResponse, Metrics, NodeId, Result, VoteRequest, VoteResponse,

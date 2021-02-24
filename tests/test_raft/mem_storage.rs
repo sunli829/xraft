@@ -1,6 +1,6 @@
 use std::collections::{BTreeMap, HashMap};
+use std::sync::RwLock;
 
-use parking_lot::RwLock;
 use xraft::{
     Entry, EntryDetail, HardState, InitialState, LogIndex, MemberShipConfig, Storage, StorageResult,
 };
@@ -23,13 +23,13 @@ pub struct MemoryStorage {
 
 impl MemoryStorage {
     pub fn get(&self, key: impl AsRef<str>) -> Option<i32> {
-        self.inner.read().kvs.get(key.as_ref()).copied()
+        self.inner.read().unwrap().kvs.get(key.as_ref()).copied()
     }
 }
 
 impl Storage<(), Action> for MemoryStorage {
     fn get_initial_state(&self) -> StorageResult<InitialState<()>> {
-        let inner = self.inner.read();
+        let inner = self.inner.read().unwrap();
         let last_entry = inner.logs.iter().rev().next().map(|(_, entry)| entry);
         Ok(InitialState {
             last_log_index: last_entry.map(|entry| entry.index).unwrap_or_default(),
@@ -40,12 +40,12 @@ impl Storage<(), Action> for MemoryStorage {
     }
 
     fn save_hard_state(&self, hard_state: HardState) -> StorageResult<()> {
-        self.inner.write().hard_state = Some(hard_state);
+        self.inner.write().unwrap().hard_state = Some(hard_state);
         Ok(())
     }
 
     fn last_applied(&self) -> StorageResult<u64> {
-        Ok(self.inner.read().last_applied)
+        Ok(self.inner.read().unwrap().last_applied)
     }
 
     fn get_log_entries(
@@ -56,6 +56,7 @@ impl Storage<(), Action> for MemoryStorage {
         Ok(self
             .inner
             .read()
+            .unwrap()
             .logs
             .range(start..end)
             .map(|(_, entry)| Entry::clone(entry))
@@ -63,7 +64,7 @@ impl Storage<(), Action> for MemoryStorage {
     }
 
     fn delete_logs_from(&self, start: LogIndex, end: Option<LogIndex>) -> StorageResult<()> {
-        let mut inner = self.inner.write();
+        let mut inner = self.inner.write().unwrap();
         let range = match end {
             Some(end) => inner.logs.range(start..end),
             None => inner.logs.range(start..),
@@ -77,7 +78,7 @@ impl Storage<(), Action> for MemoryStorage {
     }
 
     fn append_entries_to_log(&self, entries: &[Entry<(), Action>]) -> StorageResult<()> {
-        let mut inner = self.inner.write();
+        let mut inner = self.inner.write().unwrap();
         inner
             .logs
             .extend(entries.iter().map(|entry| (entry.index, entry.clone())));
@@ -85,7 +86,7 @@ impl Storage<(), Action> for MemoryStorage {
     }
 
     fn apply_entries_to_state_machine(&self, entries: &[Entry<(), Action>]) -> StorageResult<()> {
-        let mut inner = self.inner.write();
+        let mut inner = self.inner.write().unwrap();
         for entry in entries {
             if let EntryDetail::Normal(action) = &entry.detail {
                 match action {

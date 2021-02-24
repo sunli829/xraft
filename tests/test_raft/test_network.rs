@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
-use parking_lot::RwLock;
+use tokio::sync::RwLock;
 use xraft::{
     AppendEntriesRequest, AppendEntriesResponse, Network, NetworkResult, NodeId, VoteRequest,
     VoteResponse,
@@ -23,9 +23,10 @@ impl Network<(), Action> for TestNetwork {
         _target_info: &(),
         req: VoteRequest,
     ) -> NetworkResult<VoteResponse> {
-        let node = self.nodes.read().get(&target).cloned().unwrap();
+        let nodes = self.nodes.read().await;
+        let node = nodes.get(&target).unwrap();
         anyhow::ensure!(
-            !self.isolated_nodes.read().contains(&target),
+            !self.isolated_nodes.read().await.contains(&target),
             "Node '{}' is isolated",
             target
         );
@@ -38,9 +39,10 @@ impl Network<(), Action> for TestNetwork {
         _target_info: &(),
         req: AppendEntriesRequest<(), Action>,
     ) -> NetworkResult<AppendEntriesResponse> {
-        let node = self.nodes.read().get(&target).cloned().unwrap();
+        let nodes = self.nodes.read().await;
+        let node = nodes.get(&target).unwrap();
         anyhow::ensure!(
-            !self.isolated_nodes.read().contains(&target),
+            !self.isolated_nodes.read().await.contains(&target),
             "Node '{}' is isolated",
             target
         );

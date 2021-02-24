@@ -1,21 +1,22 @@
 use std::cmp::Reverse;
+use std::collections::BTreeMap;
+use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 use std::time::Duration;
 
 use fnv::{FnvHashMap, FnvHashSet};
-use futures::channel::{mpsc, oneshot};
-use futures::future::BoxFuture;
-use futures::task::AtomicWaker;
-use futures::{Future, FutureExt, StreamExt};
+use futures_util::future::BoxFuture;
+use futures_util::task::AtomicWaker;
+use futures_util::{FutureExt, StreamExt};
 use rand::prelude::*;
-use smallvec::alloc::collections::BTreeMap;
 use smallvec::SmallVec;
+use tokio::sync::{mpsc, oneshot};
+use tokio::time::Sleep;
 
 use crate::message::Message;
 use crate::ordered_group::OrderedGroup;
-use crate::runtime::Delay;
 use crate::{
     AppendEntriesRequest, AppendEntriesResponse, Config, Entry, EntryDetail, HardState, LogIndex,
     MemberShipConfig, Metrics, Network, NetworkResult, NodeId, RaftError, Result, Role, Storage,
@@ -46,8 +47,8 @@ pub struct Core<N, D> {
     commit_index: u64,
     leader: Option<NodeId>,
     pending_write: BTreeMap<u64, Vec<ReplySender>>,
-    heartbeat_timeout: Option<Delay>,
-    election_timeout: Option<Delay>,
+    heartbeat_timeout: Option<Pin<Box<Sleep>>>,
+    election_timeout: Option<Pin<Box<Sleep>>>,
     next_index: FnvHashMap<NodeId, u64>,
     match_index: FnvHashMap<NodeId, u64>,
     vote_futures: OrderedGroup<NetworkResult<(u64, u64, VoteResponse)>>,
@@ -136,16 +137,18 @@ where
     }
 
     fn reset_heartbeat_timeout(&mut self) {
-        self.heartbeat_timeout = Some(Delay::new(Duration::from_millis(
+        self.heartbeat_timeout = Some(Box::pin(tokio::time::sleep(Duration::from_millis(
             self.config.heartbeat_interval,
-        )));
+        ))));
         self.waker.wake();
     }
 
     fn reset_election_timeout(&mut self) {
-        self.election_timeout = Some(Delay::new(Duration::from_millis(thread_rng().gen_range(
-            self.config.election_timeout_min,
-            self.config.election_timeout_max,
+        self.election_timeout = Some(Box::pin(tokio::time::sleep(Duration::from_millis(
+            thread_rng().gen_range(
+                self.config.election_timeout_min,
+                self.config.election_timeout_max,
+            ),
         ))));
         self.waker.wake();
     }
@@ -651,8 +654,8 @@ where
         )
     }
 
-    fn handle_metrics(&self) -> Result<Metrics<N>> {
-        Ok(Metrics {
+    fn handle_metrics(&self) -> Metrics<N> {
+        Metrics {
             id: self.id,
             role: self.role,
             current_term: self.current_term,
@@ -660,7 +663,7 @@ where
             last_applied: self.storage.last_applied().unwrap(),
             leader: self.leader,
             membership: self.membership.clone(),
-        })
+        }
     }
 
     fn handle_message(&mut self, msg: Message<N, D>) -> Result<()> {
@@ -697,7 +700,7 @@ where
                 Ok(())
             }
             Message::Metrics { reply } => {
-                reply.send(self.handle_metrics()).ok();
+                reply.send(Ok(self.handle_metrics())).ok();
                 Ok(())
             }
             Message::Shutdown => Err(RaftError::Shutdown),
@@ -784,7 +787,6 @@ where
                 } else if !self.membership.is_member(self.id)
                     && !self.membership.is_non_voter(self.id)
                 {
-                    println!("{}", self.membership);
                     debug!(
                         name = %self.name,
                         id = self.id,
@@ -796,13 +798,11 @@ where
                         .membership
                         .members
                         .keys()
-                        .cloned()
-                        .chain(self.membership.non_voters.keys().cloned())
+                        .copied()
+                        .chain(self.membership.non_voters.keys().copied())
                     {
-                        if !self.next_index.contains_key(&id) {
-                            self.next_index.insert(id, 1);
-                            self.match_index.insert(id, 0);
-                        }
+                        self.next_index.entry(id).or_insert(1);
+                        *self.match_index.entry(id).or_default() = 0;
                     }
                 }
             }
@@ -832,19 +832,19 @@ where
     N: Send + Sync + Unpin + 'static,
     D: Send + Unpin + 'static,
 {
-    type Output = RaftError;
+    type Output = Result<()>;
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let this = &mut *self;
         this.waker.register(cx.waker());
 
         if let Some(heartbeat_timeout) = &mut this.heartbeat_timeout {
-            if let Poll::Ready(_) = heartbeat_timeout.poll_unpin(cx) {
+            if heartbeat_timeout.poll_unpin(cx).is_ready() {
                 debug!(name = this.name.as_str(), id = this.id, "heartbeat_timeout");
                 if this.role == Role::Leader {
                     this.reset_heartbeat_timeout();
                     if let Err(err) = this.send_append_entries() {
-                        return Poll::Ready(err);
+                        return Poll::Ready(Err(err));
                     }
                 } else {
                     this.heartbeat_timeout = None;
@@ -853,11 +853,11 @@ where
         }
 
         if let Some(election_timeout) = &mut this.election_timeout {
-            if let Poll::Ready(_) = election_timeout.poll_unpin(cx) {
+            if election_timeout.poll_unpin(cx).is_ready() {
                 debug!(name = this.name.as_str(), id = this.id, "election_timeout",);
                 if let Role::Follower | Role::Candidate = this.role {
                     if let Err(err) = this.handle_election_timeout() {
-                        return Poll::Ready(err);
+                        return Poll::Ready(Err(err));
                     }
                 } else {
                     this.election_timeout = None;
@@ -872,7 +872,7 @@ where
                 let remove = match fut.poll_unpin(cx) {
                     Poll::Ready(Ok(resp)) => {
                         if let Err(err) = this.handle_append_entries_response(resp) {
-                            return Poll::Ready(err);
+                            return Poll::Ready(Err(err));
                         }
                         true
                     }
@@ -897,7 +897,7 @@ where
                 {
                     if let Some(member_info) = this.membership.member_info(id) {
                         if let Err(err) = this.do_send_entries(id, member_info) {
-                            return Poll::Ready(err);
+                            return Poll::Ready(Err(err));
                         }
                         this.next_append_entries_futures.insert(id, false);
                     }
@@ -909,7 +909,7 @@ where
             match this.vote_futures.poll_next_unpin(cx) {
                 Poll::Ready(Some(Ok(resp))) => {
                     if let Err(err) = this.handle_vote_response(resp) {
-                        return Poll::Ready(err);
+                        return Poll::Ready(Err(err));
                     }
                 }
                 Poll::Ready(Some(Err(_err))) => {
@@ -924,15 +924,15 @@ where
         }
 
         loop {
-            match this.rx.poll_next_unpin(cx) {
+            match this.rx.poll_recv(cx) {
                 Poll::Ready(Some(msg)) => {
                     if let Err(err) = this.handle_message(msg) {
-                        return Poll::Ready(err);
+                        return Poll::Ready(Err(err));
                     }
                 }
                 Poll::Ready(None) => {
                     // Raft is shutdown
-                    return Poll::Ready(RaftError::Shutdown);
+                    return Poll::Ready(Ok(()));
                 }
                 Poll::Pending => break,
             }
@@ -943,13 +943,13 @@ where
             match self.apply_to_state_machine_if_needed() {
                 Ok(Some(last_id)) => self.reply_client_write(last_id + 1, || Ok(())),
                 Ok(None) => {}
-                Err(err) => return Poll::Ready(err),
+                Err(err) => return Poll::Ready(Err(err)),
             }
         } else {
             let leader = this.leader;
             this.reply_client_write(u64::MAX, || Err(RaftError::ForwardToLeader(leader)));
             if let Err(err) = self.apply_to_state_machine_if_needed() {
-                return Poll::Ready(err);
+                return Poll::Ready(Err(err));
             }
         }
 

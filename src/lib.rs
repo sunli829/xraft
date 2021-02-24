@@ -8,7 +8,6 @@ mod message;
 mod network;
 mod ordered_group;
 mod raft;
-mod runtime;
 mod storage;
 mod types;
 

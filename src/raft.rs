@@ -1,12 +1,10 @@
 use std::sync::Arc;
 
-use futures::channel::{mpsc, oneshot};
-use futures::future::Shared;
-use futures::{FutureExt, SinkExt};
+use tokio::sync::{mpsc, oneshot};
+use tokio::task::JoinHandle;
 
 use crate::core::Core;
 use crate::message::Message;
-use crate::runtime::{spawn, JoinHandle};
 use crate::{
     AppendEntriesRequest, AppendEntriesResponse, Config, Metrics, Network, NodeId, RaftError,
     Result, Storage, VoteRequest, VoteResponse,
@@ -14,16 +12,7 @@ use crate::{
 
 pub struct Raft<N, D> {
     tx: mpsc::Sender<Message<N, D>>,
-    join_handle: Shared<JoinHandle<RaftError>>,
-}
-
-impl<N, D> Clone for Raft<N, D> {
-    fn clone(&self) -> Self {
-        Self {
-            tx: self.tx.clone(),
-            join_handle: self.join_handle.clone(),
-        }
-    }
+    join_handle: JoinHandle<()>,
 }
 
 impl<N, D> Raft<N, D>
@@ -39,27 +28,15 @@ where
         network: Arc<dyn Network<N, D>>,
     ) -> Result<Self> {
         let (core, tx) = Core::new(name, id, config, storage, network)?;
-        let join_handle = spawn(async move {
-            let err = core.await;
-            if !err.is_shutdown() {
+        let join_handle = tokio::spawn(async move {
+            if let Err(err) = core.await {
                 error!(
                     error = %err,
                     "Raft error",
                 );
-            } else {
-                debug!(id = id, "Node shutdown");
             }
-            err
-        })
-        .shared();
+        });
         Ok(Self { tx, join_handle })
-    }
-
-    pub async fn wait_for_end(&self) -> Result<()> {
-        match self.join_handle.clone().await {
-            RaftError::Shutdown => Ok(()),
-            err => Err(err),
-        }
     }
 
     pub async fn initialize(&self, members: impl IntoIterator<Item = (NodeId, N)>) -> Result<()> {
@@ -152,7 +129,7 @@ where
         rx.await.map_err(|_| RaftError::Shutdown)?
     }
 
-    pub async fn shutdown(mut self) -> Result<()> {
+    pub async fn shutdown(self) -> Result<()> {
         self.tx
             .send(Message::Shutdown)
             .await

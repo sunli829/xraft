@@ -7,8 +7,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 use mem_storage::MemoryStorage;
-use parking_lot::RwLock;
 use test_network::TestNetwork;
+use tokio::sync::RwLock;
 use tracing_subscriber::layer::SubscriberExt;
 use xraft::{Config, Metrics, NodeId, Raft, RaftError, Result};
 
@@ -28,7 +28,6 @@ impl Action {
     }
 }
 
-#[derive(Clone)]
 pub struct Node {
     pub raft: Raft<(), Action>,
     pub storage: Arc<MemoryStorage>,
@@ -61,8 +60,8 @@ impl Default for TestHarness {
 }
 
 impl TestHarness {
-    pub fn add_node(&self, id: NodeId) {
-        let mut nodes = self.nodes.write();
+    pub async fn add_node(&self, id: NodeId) {
+        let mut nodes = self.nodes.write().await;
         let storage = Arc::new(MemoryStorage::default());
         let raft = Raft::new(
             format!("node-{}", id),
@@ -76,15 +75,15 @@ impl TestHarness {
     }
 
     pub async fn initialize(&self) -> Result<()> {
-        let nodes = self.nodes.read();
+        let nodes = self.nodes.read().await;
         assert!(!nodes.is_empty());
-        let raft = &nodes.iter().next().unwrap().1.raft.clone();
+        let raft = &nodes.iter().next().unwrap().1.raft;
         raft.initialize(nodes.keys().map(|id| (*id, ()))).await?;
         Ok(())
     }
 
     pub async fn add_non_voter(&self, id: NodeId) -> Result<()> {
-        let nodes = self.nodes.read();
+        let nodes = self.nodes.read().await;
         let mut leader = *nodes.keys().next().unwrap();
         loop {
             let node = nodes.get(&leader).unwrap();
@@ -98,21 +97,21 @@ impl TestHarness {
     }
 
     pub async fn metrics(&self, id: NodeId) -> Result<Metrics<()>> {
-        let nodes = self.nodes.read();
+        let nodes = self.nodes.read().await;
         let node = nodes.get(&id).unwrap();
         node.raft.metrics().await
     }
 
     pub async fn isolate_node(&self, id: NodeId) {
-        self.isolated_nodes.write().insert(id);
+        self.isolated_nodes.write().await.insert(id);
     }
 
     pub async fn restore_node(&self, id: NodeId) {
-        self.isolated_nodes.write().remove(&id);
+        self.isolated_nodes.write().await.remove(&id);
     }
 
     pub async fn write(&self, action: Action) -> Result<()> {
-        let nodes = self.nodes.read();
+        let nodes = self.nodes.read().await;
         let mut leader = *nodes.keys().next().unwrap();
         loop {
             let node = nodes.get(&leader).unwrap();
@@ -126,7 +125,7 @@ impl TestHarness {
     }
 
     pub async fn read(&self, key: impl AsRef<str>) -> Result<Option<i32>> {
-        let nodes = self.nodes.read();
+        let nodes = self.nodes.read().await;
         let mut leader = *nodes.keys().next().unwrap();
         loop {
             let node = nodes.get(&leader).unwrap();
@@ -139,7 +138,7 @@ impl TestHarness {
     }
 
     pub async fn read_from(&self, target: NodeId, key: impl AsRef<str>) -> Result<Option<i32>> {
-        let nodes = self.nodes.read();
+        let nodes = self.nodes.read().await;
         let node = nodes.get(&target).unwrap();
         Ok(node.storage.get(key))
     }
